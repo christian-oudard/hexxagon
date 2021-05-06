@@ -1,19 +1,25 @@
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
+use std::fmt;
 
-#[derive(Debug)]
+#[derive(PartialEq, Clone, Debug)]
 enum Piece {
     Empty,
     Black,
     White,
 }
+
+impl Piece {
+    fn opposite(&self) -> Piece {
+        match self {
+            Piece::Empty => Piece::Empty,
+            Piece::Black => Piece::White,
+            Piece::White => Piece::Black,
+        }
+    }
+}
+
 type Pos = (i32, i32);
 type Dir = (i32, i32);
-
-type PositionMap = HashMap<Pos, Piece>;
-
-struct Board {
-    positions: PositionMap,
-}
 
 // Double-width horizontal layout. (https://www.redblobgames.com/grids/hexagons/)
 // 0 is the piece position, 1s are one step away, and 2s are one leap away.
@@ -23,7 +29,7 @@ struct Board {
 //  2 1 1 2
 //   2 2 2
 
-const STEP_DIRECTIONS: &'static [(i32, i32)] = &[
+const STEP_DIRECTIONS: &'static [Dir] = &[
     (2, 0),   // E
     (1, 1),   // NE
     (-1, 1),  // NW
@@ -31,7 +37,7 @@ const STEP_DIRECTIONS: &'static [(i32, i32)] = &[
     (-1, -1), // SW
     (1, -1),  // SE
 ];
-const LEAP_DIRECTIONS: &'static [(i32, i32)] = &[
+const LEAP_DIRECTIONS: &'static [Dir] = &[
     (4, 0),   // E
     (3, 1),   // ENE
     (2, 2),   // NE
@@ -45,6 +51,17 @@ const LEAP_DIRECTIONS: &'static [(i32, i32)] = &[
     (2, -2),  // SE
     (3, -1),  // ESE
 ];
+
+enum Move {
+    Step(Pos),
+    Leap(Pos, Pos),
+}
+
+type PositionMap = HashMap<Pos, Piece>;
+struct Board {
+    positions: PositionMap,
+    turn: Piece,
+}
 
 impl Board {
     fn load(input: &str) -> Result<Board, String> {
@@ -77,36 +94,71 @@ impl Board {
             return Err("No pieces on board.".into());
         }
 
-        let min_x = positions
-            .keys()
-            .map(|(x, _y)| x)
-            .min()
-            .expect("empty board");
-        let min_y = positions
-            .keys()
-            .map(|(_x, y)| y)
-            .min()
-            .expect("empty board");
-        assert_eq!(*min_x, 0);
-        assert_eq!(*min_y, 0);
-
-        Ok(Board { positions })
+        let board = Board {
+            positions,
+            turn: Piece::Black,
+        };
+        assert_eq!(board.min_x(), 0);
+        assert_eq!(board.min_y(), 0);
+        Ok(board)
     }
 
     fn at(&self, pos: &Pos) -> Option<&Piece> {
         self.positions.get(pos)
     }
 
+    fn set(&mut self, pos: &Pos, piece: Piece) {
+        if let Entry::Occupied(mut entry) = self.positions.entry(*pos) {
+            entry.insert(piece);
+        }
+    }
+
+    fn min_x(&self) -> i32 {
+        *self
+            .positions
+            .keys()
+            .map(|(x, _y)| x)
+            .min()
+            .expect("empty board")
+    }
+
+    fn max_x(&self) -> i32 {
+        *self
+            .positions
+            .keys()
+            .map(|(x, _y)| x)
+            .max()
+            .expect("empty board")
+    }
+
+    fn min_y(&self) -> i32 {
+        *self
+            .positions
+            .keys()
+            .map(|(_x, y)| y)
+            .min()
+            .expect("empty board")
+    }
+
+    fn max_y(&self) -> i32 {
+        *self
+            .positions
+            .keys()
+            .map(|(_x, y)| y)
+            .max()
+            .expect("empty board")
+    }
+
     fn _neighbors(&self, pos: &Pos, directions: &[Dir]) -> Vec<Pos> {
         match self.at(pos) {
-            None => vec![],
+            None => vec![], // A position off the board has no neighbors.
             Some(_) => {
                 let mut result = Vec::new();
                 for dir in directions {
                     let n_pos = offset(*pos, *dir);
                     match self.at(&n_pos) {
                         Some(_) => result.push(n_pos),
-                        None => continue,
+                        None => continue, // Only return neighbors which are actual positions.
                     }
                 }
                 result
@@ -121,6 +173,50 @@ impl Board {
     fn leap_neighbors(&self, pos: &Pos) -> Vec<Pos> {
         self._neighbors(pos, LEAP_DIRECTIONS)
     }
+
+    fn do_move(&mut self, mv: &Move) {
+        match mv {
+            Move::Step(pos) => {
+                self.set(pos, self.turn.clone());
+                self.flip_neighbors(pos);
+            }
+            Move::Leap(start, end) => {
+                self.set(start, Piece::Empty);
+                self.set(end, self.turn.clone());
+                self.flip_neighbors(end);
+            }
+        }
+        self.turn = self.turn.opposite();
+    }
+
+    fn flip_neighbors(&mut self, pos: &Pos) {
+        for n in self.step_neighbors(pos) {
+            if let Some(p) = self.at(&n) {
+                if *p == self.turn.opposite() {
+                    self.set(&n, self.turn.clone());
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for Board {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (min_x, max_x, min_y, max_y) = (self.min_x(), self.max_x(), self.min_y(), self.max_y());
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                let c = match self.at(&(x, y)) {
+                    None => " ",
+                    Some(Piece::Empty) => "-",
+                    Some(Piece::Black) => "X",
+                    Some(Piece::White) => "O",
+                };
+                write!(f, "{}", c)?;
+            }
+            write!(f, "\n")?;
+        }
+        Ok(())
+    }
 }
 
 fn offset((x, y): Pos, (dx, dy): Dir) -> Pos {
@@ -128,7 +224,7 @@ fn offset((x, y): Pos, (dx, dy): Dir) -> Pos {
 }
 
 fn main() {
-    let board = Board::load(
+    let mut board = Board::load(
         "
             X - - - O
            - - - - - -
@@ -143,7 +239,11 @@ fn main() {
     )
     .expect("board error");
 
-    println!("{:?}", board.at(&(6, 2)));
-    println!("{:?}", board.step_neighbors(&(6, 2)));
-    println!("{:?}", board.leap_neighbors(&(6, 2)));
+    println!("{}", board.to_string());
+    board.do_move(&Move::Step((6, 0)));
+    println!("{}", board.to_string());
+    board.do_move(&Move::Leap((12, 0), (8, 0)));
+    println!("{}", board.to_string());
+    board.do_move(&Move::Leap((4, 0), (7, 1)));
+    println!("{}", board.to_string());
 }
